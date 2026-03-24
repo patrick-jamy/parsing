@@ -20,7 +20,7 @@ class GearParsingEngineTest {
         GearParsingEngine.ParseResult result = engine.parse(html);
         List<GearStat> stats = result.stats();
 
-        assertThat(result.strategy()).isEqualTo("dom-section-heuristics");
+        assertThat(result.strategy()).isEqualTo("multi-source-merged");
         assertThat(stats).hasSize(2);
 
         GearStat gear8 = stats.getFirst();
@@ -34,7 +34,7 @@ class GearParsingEngineTest {
     }
 
     @Test
-    void shouldPreferStrategyWithMoreDetectedGears() {
+    void shouldParseMixedSourcesWithoutDroppingGears() {
         String html = """
                 <html><body>
                 <h2>Gear 8</h2>
@@ -49,7 +49,7 @@ class GearParsingEngineTest {
 
         GearParsingEngine.ParseResult result = engine.parse(html);
 
-        assertThat(result.strategy()).isEqualTo("row-fallback-heuristics");
+        assertThat(result.strategy()).isEqualTo("multi-source-merged");
         assertThat(result.stats()).hasSize(3);
         assertThat(result.stats()).extracting(GearStat::gearLabel)
                 .containsExactly("Gear 8", "Gear 9", "Gear 10");
@@ -78,7 +78,7 @@ class GearParsingEngineTest {
 
         GearParsingEngine.ParseResult result = engine.parse(html);
 
-        assertThat(result.strategy()).isEqualTo("structured-json-graph-walk");
+        assertThat(result.strategy()).isEqualTo("multi-source-merged");
         assertThat(result.stats()).hasSize(12);
         assertThat(result.stats()).extracting(GearStat::gearLabel)
                 .containsExactly(
@@ -115,11 +115,26 @@ class GearParsingEngineTest {
 
         GearParsingEngine.ParseResult result = engine.parse(html);
 
-        assertThat(result.strategy()).isEqualTo("structured-json-graph-walk");
+        assertThat(result.strategy()).isEqualTo("multi-source-merged");
         assertThat(result.stats()).hasSize(12);
         assertThat(result.stats()).extracting(GearStat::gearLabel)
                 .containsExactly(
                         "Gear 1", "Gear 2", "Gear 3", "Gear 4", "Gear 5", "Gear 6",
                         "Gear 7", "Gear 8", "Gear 9", "Gear 10", "Gear 11", "Gear 12");
+    }
+
+    @Test
+    void shouldNotStopAfterTwoScriptSegments() {
+        String filler = "x".repeat(1600);
+        String html = "<html><body><script>"
+                + "gear 8 " + filler + " Mk 8 BioTech Implant Component "
+                + " gear 9 " + filler + " Mk 9 Neuro-Saav Electrobinoculars Component "
+                + " gear 10 " + filler + " Mk 10 TaggeCo Holo Lens Salvage "
+                + "</script></body></html>";
+
+        GearParsingEngine.ParseResult result = engine.parse(html);
+
+        assertThat(result.stats()).extracting(GearStat::gearLabel)
+                .contains("Gear 8", "Gear 9", "Gear 10");
     }
 }
