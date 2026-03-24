@@ -2,6 +2,7 @@ package com.example.gearparser.service;
 
 import com.example.gearparser.model.GearItem;
 import com.example.gearparser.model.GearStat;
+import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -15,6 +16,7 @@ import java.util.TreeMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+@Component
 public class GearParsingEngine {
 
     private static final Pattern GEAR_LABEL_PATTERN = Pattern.compile("(?i)\\bgear\\s*([0-9]{1,2}|[xiv]+)\\b");
