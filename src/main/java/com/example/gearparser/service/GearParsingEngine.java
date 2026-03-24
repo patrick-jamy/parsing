@@ -24,16 +24,21 @@ public class GearParsingEngine {
 
     private static final Pattern GEAR_LABEL_PATTERN = Pattern.compile("(?i)\\bgear\\s*([0-9]{1,2}|[xiv]+)\\b");
     private static final Pattern ITEM_PATTERN = Pattern.compile("(?i)mk\\s*[0-9ivx]+|salvage|prototype|injector|furnace|medpac|keypad|stun");
+    private static final Pattern SCRIPT_OBJECT_PATTERN = Pattern.compile("\\{[^{}]{0,500}\\}");
+    private static final Pattern SCRIPT_GEAR_FIELD_PATTERN = Pattern.compile("(?i)(?:gear_level|gearLevel|gearTier|gear_tier|tier|gear)\\s*[:=]\\s*['\\\"]?([0-9]{1,2}|[xiv]+)");
+    private static final Pattern SCRIPT_ITEM_FIELD_PATTERN = Pattern.compile("(?i)(?:name|item_name|itemName|label|equipment|ingredient)\\s*[:=]\\s*['\\\"]([^'\\\"]{3,140})['\\\"]");
 
     public ParseResult parse(String html) {
         Document document = Jsoup.parse(html);
         List<GearStat> bySections = parseByGearSections(document);
         List<GearStat> byTableRows = parseByRows(document);
+        List<GearStat> byDataAttributes = parseByDataAttributes(document);
         List<GearStat> byEmbeddedData = parseByEmbeddedScripts(document);
 
         return pickBest(
                 new ParseResult(bySections, "dom-section-heuristics"),
                 new ParseResult(byTableRows, "row-fallback-heuristics"),
+                new ParseResult(byDataAttributes, "dom-data-attributes-heuristics"),
                 new ParseResult(byEmbeddedData, "embedded-script-heuristics")
         );
     }
@@ -115,6 +120,21 @@ public class GearParsingEngine {
                     }
                 }
             }
+
+            Matcher objectMatcher = SCRIPT_OBJECT_PATTERN.matcher(scriptContent);
+            while (objectMatcher.find()) {
+                String objectChunk = objectMatcher.group();
+                String gear = normalizeGearLabelFromScriptChunk(objectChunk);
+                if (gear == null) {
+                    continue;
+                }
+                String itemName = extractItemNameFromScriptChunk(objectChunk);
+                if (itemName.isBlank()) {
+                    continue;
+                }
+                byGear.computeIfAbsent(gear, ignored -> new ArrayList<>())
+                        .add(new GearItem(itemName, detectColor(script, itemName)));
+            }
         }
 
         return byGear.entrySet().stream()
@@ -122,6 +142,54 @@ public class GearParsingEngine {
                 .map(entry -> toStat(entry.getKey(), entry.getValue()))
                 .sorted(Comparator.comparingInt(this::gearLevelFromLabel))
                 .toList();
+    }
+
+    private List<GearStat> parseByDataAttributes(Document document) {
+        Elements candidates = document.select("[data-gear], [data-gear-level], [data-tier], [data-name], [title], [alt], a, span, div");
+        Map<String, List<GearItem>> byGear = new LinkedHashMap<>();
+
+        for (Element candidate : candidates) {
+            String itemText = String.join(" ",
+                    candidate.ownText(),
+                    candidate.attr("data-name"),
+                    candidate.attr("title"),
+                    candidate.attr("alt")).trim();
+            String itemName = extractItemName(itemText);
+            if (itemName.isBlank()) {
+                continue;
+            }
+
+            String gear = Optional.ofNullable(normalizeGearLabel(candidate.attr("data-gear")))
+                    .or(() -> Optional.ofNullable(normalizeGearLabel(candidate.attr("data-gear-level"))))
+                    .or(() -> Optional.ofNullable(normalizeGearLabel(candidate.attr("data-tier"))))
+                    .or(() -> Optional.ofNullable(inferGearLabel(candidate)))
+                    .orElse("Gear inconnu");
+
+            byGear.computeIfAbsent(gear, ignored -> new ArrayList<>())
+                    .add(new GearItem(itemName, detectColor(candidate, itemName)));
+        }
+
+        return byGear.entrySet().stream()
+                .filter(entry -> !entry.getValue().isEmpty())
+                .map(entry -> toStat(entry.getKey(), entry.getValue()))
+                .sorted(Comparator.comparingInt(this::gearLevelFromLabel))
+                .toList();
+    }
+
+    private String normalizeGearLabelFromScriptChunk(String chunk) {
+        Matcher matcher = SCRIPT_GEAR_FIELD_PATTERN.matcher(chunk);
+        if (!matcher.find()) {
+            return null;
+        }
+        return "Gear " + matcher.group(1).toUpperCase(Locale.ROOT);
+    }
+
+    private String extractItemNameFromScriptChunk(String chunk) {
+        Matcher matcher = SCRIPT_ITEM_FIELD_PATTERN.matcher(chunk);
+        if (!matcher.find()) {
+            return "";
+        }
+        return extractItemName(matcher.group(1));
     }
 
     private String inferGearLabel(Element row) {
