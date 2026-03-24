@@ -11,6 +11,7 @@ import java.time.Instant;
 
 @Service
 public class GearStatsService {
+    private static final int MIN_EXPECTED_GEAR_COUNT = 12;
 
     private final HtmlFetcher htmlFetcher;
     private final GearParsingEngine parsingEngine;
@@ -33,18 +34,29 @@ public class GearStatsService {
     }
 
     public synchronized ParseResponse reload() {
-        String html;
         String strategyPrefix = "remote";
+        GearParsingEngine.ParseResult result;
         try {
-            html = htmlFetcher.fetch(sourceUrl);
+            String html = htmlFetcher.fetch(sourceUrl);
+            result = parseAndValidate(html, "source distante");
         } catch (Exception ex) {
-            html = loadFallbackHtml();
             strategyPrefix = "fallback-sample";
+            String fallbackHtml = loadFallbackHtml();
+            result = parseAndValidate(fallbackHtml, "fallback local");
         }
 
-        GearParsingEngine.ParseResult result = parsingEngine.parse(html);
         cache = new ParseResponse(sourceUrl, Instant.now(), result.stats(), strategyPrefix + "+" + result.strategy());
         return cache;
+    }
+
+    private GearParsingEngine.ParseResult parseAndValidate(String html, String sourceLabel) {
+        GearParsingEngine.ParseResult result = parsingEngine.parse(html);
+        if (result.stats().size() < MIN_EXPECTED_GEAR_COUNT) {
+            throw new IllegalStateException(
+                    "Parsing incomplet depuis " + sourceLabel + " : " + result.stats().size()
+                            + " gears trouvés au lieu d'au moins " + MIN_EXPECTED_GEAR_COUNT + ".");
+        }
+        return result;
     }
 
     private String loadFallbackHtml() {
