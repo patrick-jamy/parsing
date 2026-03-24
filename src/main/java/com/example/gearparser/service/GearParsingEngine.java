@@ -70,7 +70,7 @@ public class GearParsingEngine {
                 continue;
             }
 
-            String gear = Optional.ofNullable(normalizeGearLabel(text)).orElse("Gear inconnu");
+            String gear = Optional.ofNullable(inferGearLabel(row)).orElse("Gear inconnu");
             String itemName = extractItemName(text);
             if (itemName.isBlank()) {
                 continue;
@@ -122,6 +122,36 @@ public class GearParsingEngine {
                 .map(entry -> toStat(entry.getKey(), entry.getValue()))
                 .sorted(Comparator.comparingInt(this::gearLevelFromLabel))
                 .toList();
+    }
+
+    private String inferGearLabel(Element row) {
+        String direct = normalizeGearLabel(row.text());
+        if (direct != null) {
+            return direct;
+        }
+
+        Element cursor = row;
+        while (cursor != null) {
+            Element sibling = cursor.previousElementSibling();
+            while (sibling != null) {
+                String fromSibling = normalizeGearLabel(sibling.text());
+                if (fromSibling != null) {
+                    return fromSibling;
+                }
+
+                Element nestedHeading = sibling.selectFirst("h1, h2, h3, h4, h5, h6");
+                if (nestedHeading != null) {
+                    String fromNestedHeading = normalizeGearLabel(nestedHeading.text());
+                    if (fromNestedHeading != null) {
+                        return fromNestedHeading;
+                    }
+                }
+                sibling = sibling.previousElementSibling();
+            }
+            cursor = cursor.parent();
+        }
+
+        return null;
     }
 
     private ParseResult pickBest(ParseResult... candidates) {
