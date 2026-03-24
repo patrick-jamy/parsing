@@ -54,4 +54,35 @@ class GearParsingEngineTest {
         assertThat(result.stats()).extracting(GearStat::gearLabel)
                 .containsExactly("Gear 8", "Gear 9", "Gear 10");
     }
+
+    @Test
+    void shouldParseAllGearsFromEmbeddedDataObjects() {
+        String html = """
+                <html><body><script>
+                const gear = [
+                  {gear: 1, name: "Mk 1 Sienar Holo Projector Salvage"},
+                  {gear: 2, name: "Mk 2 CEC Fusion Furnace Salvage"},
+                  {gear: 3, name: "Mk 3 Carbanti Sensor Array Salvage"},
+                  {gear: 4, name: "Mk 4 Chiewab Hypo Syringe Salvage"},
+                  {gear: 5, name: "Mk 5 A/KT Stun Gun Salvage"},
+                  {gear: 6, name: "Mk 6 Athakam Medpac Salvage"},
+                  {gear: 7, name: "Mk 7 Kyrotech Shock Prod Prototype Salvage"},
+                  {gear: 8, name: "Mk 8 BioTech Implant Component"},
+                  {gear: 9, name: "Mk 9 Neuro-Saav Electrobinoculars Component"},
+                  {gear: 10, name: "Mk 10 TaggeCo Holo Lens Salvage"},
+                  {gear: 11, name: "Mk 11 BlasTech Weapon Mod Prototype"},
+                  {gear: 12, name: "Mk 12 ArmaTek Fusion Furnace Prototype Salvage"}
+                ];
+                </script></body></html>
+                """;
+
+        GearParsingEngine.ParseResult result = engine.parse(html);
+
+        assertThat(result.strategy()).isEqualTo("embedded-script-heuristics");
+        assertThat(result.stats()).hasSize(12);
+        assertThat(result.stats()).extracting(GearStat::gearLabel)
+                .containsExactly(
+                        "Gear 1", "Gear 2", "Gear 3", "Gear 4", "Gear 5", "Gear 6",
+                        "Gear 7", "Gear 8", "Gear 9", "Gear 10", "Gear 11", "Gear 12");
+    }
 }
