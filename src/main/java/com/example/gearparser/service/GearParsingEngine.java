@@ -90,7 +90,7 @@ public class GearParsingEngine {
 
         for (int i = 0; i < scriptContent.length(); i++) {
             char current = scriptContent.charAt(i);
-            if (current != '=' && current != ':') {
+            if (current != '=') {
                 continue;
             }
 
