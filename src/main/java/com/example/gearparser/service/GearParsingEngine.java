@@ -1,6 +1,8 @@
 package com.example.gearparser.service;
 
 import com.example.gearparser.model.GearItem;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.example.gearparser.model.GearStat;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -15,12 +17,17 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Iterator;
+import java.util.Map.Entry;
 import java.util.Optional;
+import java.util.TreeMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @Component
 public class GearParsingEngine {
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private static final Pattern GEAR_LABEL_PATTERN = Pattern.compile("(?i)\\bgear\\s*([0-9]{1,2}|[xiv]+)\\b");
     private static final Pattern ITEM_PATTERN = Pattern.compile("(?i)mk\\s*[0-9ivx]+|salvage|prototype|injector|furnace|medpac|keypad|stun");
@@ -30,12 +37,14 @@ public class GearParsingEngine {
 
     public ParseResult parse(String html) {
         Document document = Jsoup.parse(html);
+        List<GearStat> byStructuredJson = parseByStructuredJson(document);
         List<GearStat> bySections = parseByGearSections(document);
         List<GearStat> byTableRows = parseByRows(document);
         List<GearStat> byDataAttributes = parseByDataAttributes(document);
         List<GearStat> byEmbeddedData = parseByEmbeddedScripts(document);
 
         return pickBest(
+                new ParseResult(byStructuredJson, "structured-json-graph-walk"),
                 new ParseResult(bySections, "dom-section-heuristics"),
                 new ParseResult(byTableRows, "row-fallback-heuristics"),
                 new ParseResult(byDataAttributes, "dom-data-attributes-heuristics"),
@@ -43,6 +52,212 @@ public class GearParsingEngine {
         );
     }
 
+
+
+    private List<GearStat> parseByStructuredJson(Document document) {
+        Map<Integer, List<GearItem>> byGear = new TreeMap<>();
+
+        for (Element script : document.select("script")) {
+            String scriptContent = script.data();
+            if (scriptContent == null || scriptContent.isBlank()) {
+                continue;
+            }
+
+            for (String jsonCandidate : extractJsonCandidates(scriptContent)) {
+                try {
+                    JsonNode root = objectMapper.readTree(jsonCandidate);
+                    collectGearItemsFromJson(root, null, byGear);
+                } catch (Exception ignored) {
+                    // non-JSON script fragment; continue scanning
+                }
+            }
+        }
+
+        return byGear.entrySet().stream()
+                .filter(entry -> !entry.getValue().isEmpty())
+                .map(entry -> toStat("Gear " + entry.getKey(), entry.getValue()))
+                .toList();
+    }
+
+    private List<String> extractJsonCandidates(String scriptContent) {
+        List<String> candidates = new ArrayList<>();
+
+        for (int i = 0; i < scriptContent.length(); i++) {
+            char current = scriptContent.charAt(i);
+            if (current != '=' && current != ':') {
+                continue;
+            }
+
+            int start = findNextJsonStart(scriptContent, i + 1);
+            if (start < 0) {
+                continue;
+            }
+
+            String candidate = readBalancedJson(scriptContent, start);
+            if (!candidate.isBlank()) {
+                candidates.add(candidate);
+                i = start + candidate.length() - 1;
+            }
+        }
+
+        String trimmed = scriptContent.trim();
+        if ((trimmed.startsWith("{") && trimmed.endsWith("}"))
+                || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+            candidates.add(trimmed);
+        }
+
+        return candidates;
+    }
+
+    private int findNextJsonStart(String scriptContent, int fromIndex) {
+        for (int i = fromIndex; i < scriptContent.length(); i++) {
+            char ch = scriptContent.charAt(i);
+            if (Character.isWhitespace(ch)) {
+                continue;
+            }
+            if (ch == '{' || ch == '[') {
+                return i;
+            }
+            return -1;
+        }
+        return -1;
+    }
+
+    private String readBalancedJson(String scriptContent, int startIndex) {
+        char opening = scriptContent.charAt(startIndex);
+        char closing = opening == '{' ? '}' : ']';
+        int depth = 0;
+        boolean inString = false;
+        char stringDelimiter = 0;
+        boolean escaped = false;
+
+        for (int i = startIndex; i < scriptContent.length(); i++) {
+            char ch = scriptContent.charAt(i);
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                    continue;
+                }
+                if (ch == '\\') {
+                    escaped = true;
+                    continue;
+                }
+                if (ch == stringDelimiter) {
+                    inString = false;
+                }
+                continue;
+            }
+
+            if (ch == '"' || ch == '\'') {
+                inString = true;
+                stringDelimiter = ch;
+                continue;
+            }
+
+            if (ch == opening) {
+                depth++;
+            } else if (ch == closing) {
+                depth--;
+                if (depth == 0) {
+                    return scriptContent.substring(startIndex, i + 1);
+                }
+            }
+        }
+
+        return "";
+    }
+
+    private void collectGearItemsFromJson(JsonNode node, Integer inheritedGear, Map<Integer, List<GearItem>> byGear) {
+        if (node == null || node.isNull()) {
+            return;
+        }
+
+        if (node.isArray()) {
+            for (JsonNode child : node) {
+                collectGearItemsFromJson(child, inheritedGear, byGear);
+            }
+            return;
+        }
+
+        if (!node.isObject()) {
+            return;
+        }
+
+        Integer localGear = extractGearLevelFromJson(node).orElse(inheritedGear);
+
+        Optional<String> localItemName = extractItemNameFromJsonNode(node);
+        if (localGear != null && localItemName.isPresent()) {
+            String itemName = extractItemName(localItemName.get());
+            if (!itemName.isBlank()) {
+                byGear.computeIfAbsent(localGear, ignored -> new ArrayList<>())
+                        .add(new GearItem(itemName, detectColorFromText(node.toString() + " " + itemName)));
+            }
+        }
+
+        Iterator<Entry<String, JsonNode>> fields = node.fields();
+        while (fields.hasNext()) {
+            Entry<String, JsonNode> field = fields.next();
+            collectGearItemsFromJson(field.getValue(), localGear, byGear);
+        }
+    }
+
+    private Optional<Integer> extractGearLevelFromJson(JsonNode node) {
+        for (String field : List.of("gear", "gearLevel", "gear_level", "gearTier", "gear_tier", "tier", "tierId", "gear_id")) {
+            if (!node.has(field)) {
+                continue;
+            }
+            JsonNode value = node.get(field);
+            Integer parsed = parseGearLevelText(value.isNumber() ? value.asText() : value.asText(""));
+            if (parsed != null) {
+                return Optional.of(parsed);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private Optional<String> extractItemNameFromJsonNode(JsonNode node) {
+        for (String field : List.of("name", "item_name", "itemName", "label", "equipment", "ingredient", "title", "desc", "description")) {
+            if (!node.has(field)) {
+                continue;
+            }
+            String value = node.get(field).asText("");
+            if (!value.isBlank()) {
+                return Optional.of(value);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private Integer parseGearLevelText(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+
+        Matcher numericMatcher = Pattern.compile("([0-9]{1,2})").matcher(raw);
+        if (numericMatcher.find()) {
+            return Integer.parseInt(numericMatcher.group(1));
+        }
+
+        Matcher romanMatcher = Pattern.compile("\\b([XIV]{1,4})\\b", Pattern.CASE_INSENSITIVE).matcher(raw);
+        if (romanMatcher.find()) {
+            return romanToInt(romanMatcher.group(1).toUpperCase(Locale.ROOT));
+        }
+
+        return null;
+    }
+
+    private String detectColorFromText(String input) {
+        String aggregated = Optional.ofNullable(input).orElse("").toLowerCase(Locale.ROOT);
+
+        if (containsAny(aggregated, "orange", "gold", "amber", "legendary")) return "orange";
+        if (containsAny(aggregated, "blue", "bleu", "rare")) return "bleu";
+        if (containsAny(aggregated, "purple", "epic", "violet")) return "violet";
+        if (containsAny(aggregated, "green", "vert", "uncommon")) return "vert";
+        if (containsAny(aggregated, "grey", "gray", "common", "basic")) return "gris";
+
+        if (aggregated.contains("prototype")) return "orange";
+        return "inconnu";
+    }
     private List<GearStat> parseByGearSections(Document document) {
         List<Element> headings = document.select("h1, h2, h3, h4, h5, .card-title, .section-title, strong").stream()
                 .filter(el -> GEAR_LABEL_PATTERN.matcher(el.text()).find())
@@ -282,17 +497,8 @@ public class GearParsingEngine {
                 source.className(),
                 source.attr("style"),
                 Optional.ofNullable(source.selectFirst("img")).map(img -> img.className() + " " + img.attr("style") + " " + img.attr("alt")).orElse(""),
-                itemName)
-                .toLowerCase(Locale.ROOT);
-
-        if (containsAny(aggregated, "orange", "gold", "amber", "legendary")) return "orange";
-        if (containsAny(aggregated, "blue", "bleu", "rare")) return "bleu";
-        if (containsAny(aggregated, "purple", "epic", "violet")) return "violet";
-        if (containsAny(aggregated, "green", "vert", "uncommon")) return "vert";
-        if (containsAny(aggregated, "grey", "gray", "common", "basic")) return "gris";
-
-        if (aggregated.contains("prototype")) return "orange";
-        return "inconnu";
+                itemName);
+        return detectColorFromText(aggregated);
     }
 
     private boolean containsAny(String input, String... values) {

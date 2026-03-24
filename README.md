@@ -22,7 +22,9 @@ Puis ouvrir: `http://localhost:8080`.
 
 ## Stratégie de parsing
 
-Le moteur tente d'abord un parsing par sections Gear (titres + voisins DOM), puis bascule sur un parsing de lignes (tables/listes) si la structure n'est pas détectée. La détection de couleur est heuristique (classes CSS, style inline, alt/image, texte métier).
+Le moteur commence désormais par une stratégie **fondamentalement différente**: extraction de blocs JSON embarqués (ex: `window.__NEXT_DATA__`, objets inline, tableaux JS), puis parcours récursif du graphe JSON pour retrouver les couples `(gearLevel, item)` même quand le Gear n'est pas répété sur chaque entrée.
+
+Ensuite seulement, il conserve des fallbacks DOM (sections Gear, lignes table/liste, attributs data, regex scripts) pour les pages plus anciennes. La détection de couleur reste heuristique (classes CSS, style inline, alt/image, texte métier).
 
 ## Limite connue
 
