@@ -6,32 +6,141 @@
     <title>SWGOH Gear Parser</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body { font-family: Arial, sans-serif; margin: 2rem; background: #0f172a; color: #e2e8f0; }
-        button { background: #2563eb; color: white; border: 0; border-radius: 8px; padding: .6rem 1rem; cursor: pointer; }
-        button:hover { background: #1d4ed8; }
-        table { width: 100%; border-collapse: collapse; margin-top: 1rem; background: #1e293b; }
-        th, td { padding: .6rem; border: 1px solid #334155; text-align: left; }
-        .meta { opacity: .8; margin: .6rem 0; }
+        :root {
+            --bg-deep: #050b1d;
+            --bg-panel: rgba(12, 28, 56, 0.72);
+            --line: rgba(148, 184, 255, 0.25);
+            --text-main: #e6f2ff;
+            --text-muted: #9fb7d9;
+            --accent: #43b0ff;
+            --accent-2: #6ce5ff;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            padding: 2rem;
+            color: var(--text-main);
+            font-family: "Inter", "Segoe UI", Arial, sans-serif;
+            background:
+                    radial-gradient(circle at 15% 15%, rgba(44, 122, 255, 0.22), transparent 32%),
+                    radial-gradient(circle at 85% 0%, rgba(108, 229, 255, 0.16), transparent 40%),
+                    linear-gradient(150deg, #020617 0%, #0a1d42 48%, #0b2f5c 100%);
+        }
+
+        .shell {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 1.6rem;
+            border-radius: 18px;
+            border: 1px solid var(--line);
+            background:
+                    linear-gradient(135deg, rgba(20, 45, 86, 0.78), rgba(8, 22, 47, 0.84)),
+                    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0));
+            box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(5px);
+        }
+
+        .title {
+            margin: 0 0 .4rem;
+            letter-spacing: .4px;
+            text-shadow: 0 0 24px rgba(67, 176, 255, 0.35);
+        }
+
+        .subtitle {
+            margin: 0 0 1rem;
+            color: var(--text-muted);
+        }
+
+        button {
+            color: #f7fbff;
+            border: 1px solid rgba(155, 222, 255, 0.6);
+            border-radius: 12px;
+            padding: .66rem 1.05rem;
+            cursor: pointer;
+            font-weight: 600;
+            letter-spacing: .2px;
+            background: linear-gradient(135deg, #0d7fdb 0%, #4bb8ff 100%);
+            box-shadow: 0 10px 28px rgba(16, 104, 199, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+            transition: transform .15s ease, box-shadow .15s ease;
+        }
+
+        button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 14px 30px rgba(16, 104, 199, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+        }
+
+        .meta {
+            margin: .8rem 0 1rem;
+            padding: .7rem .9rem;
+            border-radius: 10px;
+            color: var(--text-muted);
+            background: rgba(16, 42, 88, 0.45);
+            border: 1px solid rgba(143, 197, 255, 0.22);
+            font-size: .92rem;
+        }
+
+        .chart-box,
+        .table-box {
+            border-radius: 14px;
+            border: 1px solid rgba(143, 197, 255, 0.2);
+            background: linear-gradient(180deg, rgba(8, 26, 56, 0.66), rgba(4, 16, 38, 0.78));
+            padding: .9rem;
+            margin-top: .9rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: .72rem .6rem;
+            border-bottom: 1px solid rgba(121, 175, 255, 0.16);
+            text-align: left;
+        }
+
+        th {
+            color: var(--accent-2);
+            font-weight: 700;
+            text-transform: uppercase;
+            font-size: .76rem;
+            letter-spacing: .7px;
+        }
+
+        tr:hover td {
+            background: rgba(67, 176, 255, 0.08);
+        }
     </style>
 </head>
 <body>
-<h1>Dashboard de parsing SWGOH</h1>
-<p>Extraction intelligente des items par gear + catégorisation couleur.</p>
-<button id="reloadButton">Reload</button>
-<p class="meta" id="meta"></p>
-<canvas id="gearChart" height="110"></canvas>
-<table>
-    <thead>
-    <tr>
-        <th>Gear</th>
-        <th>Total items</th>
-        <th>Bleus</th>
-        <th>Orange</th>
-        <th>Autres</th>
-    </tr>
-    </thead>
-    <tbody id="statsBody"></tbody>
-</table>
+<div class="shell">
+    <h1 class="title">Dashboard de parsing SWGOH</h1>
+    <p class="subtitle">Extraction intelligente des items par gear + catégorisation couleur.</p>
+    <button id="reloadButton">Reload</button>
+    <p class="meta" id="meta"></p>
+    <div class="chart-box">
+        <canvas id="gearChart" height="110"></canvas>
+    </div>
+    <div class="table-box">
+        <table>
+            <thead>
+            <tr>
+                <th>Gear</th>
+                <th>Total items</th>
+                <th>Bleus</th>
+                <th>Orange</th>
+                <th>Autres</th>
+            </tr>
+            </thead>
+            <tbody id="statsBody"></tbody>
+        </table>
+    </div>
+</div>
 
 <script>
     let chart;
@@ -74,11 +183,30 @@
                 labels,
                 datasets: [
                     {label: 'Total', data: totals, backgroundColor: 'rgba(148,163,184,0.7)'},
-                    {label: 'Bleu', data: blues, backgroundColor: 'rgba(59,130,246,0.8)'},
-                    {label: 'Orange', data: oranges, backgroundColor: 'rgba(249,115,22,0.8)'}
+                    {label: 'Bleu', data: blues, backgroundColor: 'rgba(73,168,255,0.85)'},
+                    {label: 'Orange', data: oranges, backgroundColor: 'rgba(249,115,22,0.86)'}
                 ]
             },
-            options: {responsive: true}
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: {
+                        labels: {
+                            color: '#dbeafe'
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        ticks: {color: '#b8d6ff'},
+                        grid: {color: 'rgba(184, 214, 255, 0.18)'}
+                    },
+                    x: {
+                        ticks: {color: '#b8d6ff'},
+                        grid: {color: 'rgba(184, 214, 255, 0.08)'}
+                    }
+                }
+            }
         });
     }
 
