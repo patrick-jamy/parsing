@@ -1,11 +1,11 @@
 package com.example.gearparser.service;
 
 import com.example.gearparser.model.GearItem;
+import com.example.gearparser.model.GearStat;
 import com.fasterxml.jackson.core.json.JsonReadFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.example.gearparser.model.GearStat;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -15,12 +15,11 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Iterator;
-import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.TreeMap;
 import java.util.regex.Matcher;
@@ -36,109 +35,98 @@ public class GearParsingEngine {
             .build();
 
     private static final Pattern GEAR_LABEL_PATTERN = Pattern.compile("(?i)\\bgear\\s*([0-9]{1,2}|[xiv]+)\\b");
-    private static final Pattern ITEM_PATTERN = Pattern.compile("(?i)mk\\s*[0-9ivx]+|salvage|prototype|injector|furnace|medpac|keypad|stun");
-    private static final Pattern SCRIPT_OBJECT_PATTERN = Pattern.compile("\\{[^{}]{0,500}\\}");
-    private static final Pattern SCRIPT_GEAR_FIELD_PATTERN = Pattern.compile("(?i)(?:gear_level|gearLevel|gearTier|gear_tier|tier|gear)\\s*[:=]\\s*['\\\"]?([0-9]{1,2}|[xiv]+)");
-    private static final Pattern SCRIPT_ITEM_FIELD_PATTERN = Pattern.compile("(?i)(?:name|item_name|itemName|label|equipment|ingredient)\\s*[:=]\\s*['\\\"]([^'\\\"]{3,140})['\\\"]");
+    private static final Pattern GEAR_ANYWHERE_PATTERN = Pattern.compile("(?i)\\bgear\\W{0,8}([0-9]{1,2}|[xiv]+)\\b");
+    private static final Pattern ITEM_PATTERN = Pattern.compile("(?i)mk\\s*[0-9ivx]+|salvage|prototype|injector|furnace|medpac|keypad|stun|implant|electrobinocular|holo|carbanti");
+    private static final Pattern SCRIPT_ITEM_PATTERN = Pattern.compile("(?i)(mk\\s*[0-9ivx][^\\n\\r\"']{1,120}(?:salvage|prototype|component|furnace|stun gun|injector|medpac|keypad|implant|electrobinoculars?))");
 
     public ParseResult parse(String html) {
         Document document = Jsoup.parse(html);
-        List<GearStat> byStructuredJson = parseByStructuredJson(document);
-        List<GearStat> bySections = parseByGearSections(document);
-        List<GearStat> byTableRows = parseByRows(document);
-        List<GearStat> byDataAttributes = parseByDataAttributes(document);
-        List<GearStat> byEmbeddedData = parseByEmbeddedScripts(document);
 
-        return pickBest(
-                new ParseResult(byStructuredJson, "structured-json-graph-walk"),
-                new ParseResult(bySections, "dom-section-heuristics"),
-                new ParseResult(byTableRows, "row-fallback-heuristics"),
-                new ParseResult(byDataAttributes, "dom-data-attributes-heuristics"),
-                new ParseResult(byEmbeddedData, "embedded-script-heuristics")
-        );
+        Map<Integer, LinkedHashSet<GearItem>> merged = new TreeMap<>();
+        merge(merged, parseByStructuredJson(document));
+        merge(merged, parseByDomTraversal(document));
+        merge(merged, parseByScriptSegments(document));
+        merge(merged, parseByDataAttributes(document));
+
+        List<GearStat> stats = merged.entrySet().stream()
+                .filter(entry -> !entry.getValue().isEmpty())
+                .map(entry -> toStat("Gear " + entry.getKey(), new ArrayList<>(entry.getValue())))
+                .sorted(Comparator.comparingInt(this::gearLevelFromLabel))
+                .toList();
+
+        return new ParseResult(stats, "multi-source-merged");
     }
 
+    private void merge(Map<Integer, LinkedHashSet<GearItem>> target, Map<Integer, LinkedHashSet<GearItem>> source) {
+        for (Map.Entry<Integer, LinkedHashSet<GearItem>> entry : source.entrySet()) {
+            target.computeIfAbsent(entry.getKey(), ignored -> new LinkedHashSet<>()).addAll(entry.getValue());
+        }
+    }
 
-
-    private List<GearStat> parseByStructuredJson(Document document) {
-        Map<Integer, List<GearItem>> byGear = new TreeMap<>();
-
+    private Map<Integer, LinkedHashSet<GearItem>> parseByStructuredJson(Document document) {
+        Map<Integer, LinkedHashSet<GearItem>> byGear = new TreeMap<>();
         for (Element script : document.select("script")) {
-            String scriptContent = script.data();
-            if (scriptContent == null || scriptContent.isBlank()) {
+            String content = script.data();
+            if (content == null || content.isBlank()) {
                 continue;
             }
 
-            for (String jsonCandidate : extractJsonCandidates(scriptContent)) {
+            for (String candidate : extractJsonCandidates(content)) {
                 try {
-                    JsonNode root = objectMapper.readTree(jsonCandidate);
+                    JsonNode root = objectMapper.readTree(candidate);
                     collectGearItemsFromJson(root, null, byGear);
                 } catch (Exception ignored) {
-                    // non-JSON script fragment; continue scanning
+                    // ignore invalid chunks
                 }
             }
         }
-
-        return byGear.entrySet().stream()
-                .filter(entry -> !entry.getValue().isEmpty())
-                .map(entry -> toStat("Gear " + entry.getKey(), entry.getValue()))
-                .toList();
+        return byGear;
     }
 
     private List<String> extractJsonCandidates(String scriptContent) {
         List<String> candidates = new ArrayList<>();
-
         for (int i = 0; i < scriptContent.length(); i++) {
-            char current = scriptContent.charAt(i);
-            if (current != '=') {
+            if (scriptContent.charAt(i) != '=') {
                 continue;
             }
-
             int start = findNextJsonStart(scriptContent, i + 1);
             if (start < 0) {
                 continue;
             }
-
             String candidate = readBalancedJson(scriptContent, start);
             if (!candidate.isBlank()) {
                 candidates.add(candidate);
-                i = start + candidate.length() - 1;
             }
         }
 
         String trimmed = scriptContent.trim();
-        if ((trimmed.startsWith("{") && trimmed.endsWith("}"))
-                || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+        if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
             candidates.add(trimmed);
         }
-
         return candidates;
     }
 
-    private int findNextJsonStart(String scriptContent, int fromIndex) {
-        for (int i = fromIndex; i < scriptContent.length(); i++) {
-            char ch = scriptContent.charAt(i);
+    private int findNextJsonStart(String content, int fromIndex) {
+        for (int i = fromIndex; i < content.length(); i++) {
+            char ch = content.charAt(i);
             if (Character.isWhitespace(ch)) {
                 continue;
             }
-            if (ch == '{' || ch == '[') {
-                return i;
-            }
-            return -1;
+            return (ch == '{' || ch == '[') ? i : -1;
         }
         return -1;
     }
 
-    private String readBalancedJson(String scriptContent, int startIndex) {
-        char opening = scriptContent.charAt(startIndex);
+    private String readBalancedJson(String content, int startIndex) {
+        char opening = content.charAt(startIndex);
         char closing = opening == '{' ? '}' : ']';
         int depth = 0;
         boolean inString = false;
-        char stringDelimiter = 0;
+        char delimiter = 0;
         boolean escaped = false;
 
-        for (int i = startIndex; i < scriptContent.length(); i++) {
-            char ch = scriptContent.charAt(i);
+        for (int i = startIndex; i < content.length(); i++) {
+            char ch = content.charAt(i);
             if (inString) {
                 if (escaped) {
                     escaped = false;
@@ -148,15 +136,15 @@ public class GearParsingEngine {
                     escaped = true;
                     continue;
                 }
-                if (ch == stringDelimiter) {
+                if (ch == delimiter) {
                     inString = false;
                 }
                 continue;
             }
 
-            if (ch == '"' || ch == '\'') {
+            if (ch == '\'' || ch == '"') {
                 inString = true;
-                stringDelimiter = ch;
+                delimiter = ch;
                 continue;
             }
 
@@ -165,7 +153,7 @@ public class GearParsingEngine {
             } else if (ch == closing) {
                 depth--;
                 if (depth == 0) {
-                    return scriptContent.substring(startIndex, i + 1);
+                    return content.substring(startIndex, i + 1);
                 }
             }
         }
@@ -173,15 +161,13 @@ public class GearParsingEngine {
         return "";
     }
 
-    private void collectGearItemsFromJson(JsonNode node, Integer inheritedGear, Map<Integer, List<GearItem>> byGear) {
+    private void collectGearItemsFromJson(JsonNode node, Integer inheritedGear, Map<Integer, LinkedHashSet<GearItem>> byGear) {
         if (node == null || node.isNull()) {
             return;
         }
 
         if (node.isArray()) {
-            for (JsonNode child : node) {
-                collectGearItemsFromJson(child, inheritedGear, byGear);
-            }
+            node.forEach(child -> collectGearItemsFromJson(child, inheritedGear, byGear));
             return;
         }
 
@@ -190,21 +176,14 @@ public class GearParsingEngine {
         }
 
         Integer localGear = extractGearLevelFromJson(node).orElse(inheritedGear);
+        Optional<String> itemName = extractItemNameFromJsonNode(node).map(this::extractItemName).filter(s -> !s.isBlank());
 
-        Optional<String> localItemName = extractItemNameFromJsonNode(node);
-        if (localGear != null && localItemName.isPresent()) {
-            String itemName = extractItemName(localItemName.get());
-            if (!itemName.isBlank()) {
-                byGear.computeIfAbsent(localGear, ignored -> new ArrayList<>())
-                        .add(new GearItem(itemName, detectColorFromText(node.toString() + " " + itemName)));
-            }
+        if (localGear != null && itemName.isPresent()) {
+            byGear.computeIfAbsent(localGear, ignored -> new LinkedHashSet<>())
+                    .add(new GearItem(itemName.get(), detectColorFromText(node.toString() + " " + itemName.get())));
         }
 
-        Iterator<Entry<String, JsonNode>> fields = node.fields();
-        while (fields.hasNext()) {
-            Entry<String, JsonNode> field = fields.next();
-            collectGearItemsFromJson(field.getValue(), localGear, byGear);
-        }
+        node.fields().forEachRemaining(entry -> collectGearItemsFromJson(entry.getValue(), localGear, byGear));
     }
 
     private Optional<Integer> extractGearLevelFromJson(JsonNode node) {
@@ -212,8 +191,7 @@ public class GearParsingEngine {
             if (!node.has(field)) {
                 continue;
             }
-            JsonNode value = node.get(field);
-            Integer parsed = parseGearLevelText(value.isNumber() ? value.asText() : value.asText(""));
+            Integer parsed = parseGearLevelText(node.get(field).asText(""));
             if (parsed != null) {
                 return Optional.of(parsed);
             }
@@ -223,15 +201,140 @@ public class GearParsingEngine {
 
     private Optional<String> extractItemNameFromJsonNode(JsonNode node) {
         for (String field : List.of("name", "item_name", "itemName", "label", "equipment", "ingredient", "title", "desc", "description")) {
-            if (!node.has(field)) {
-                continue;
-            }
-            String value = node.get(field).asText("");
-            if (!value.isBlank()) {
-                return Optional.of(value);
+            if (node.has(field)) {
+                String value = node.get(field).asText("");
+                if (!value.isBlank()) {
+                    return Optional.of(value);
+                }
             }
         }
         return Optional.empty();
+    }
+
+    private Map<Integer, LinkedHashSet<GearItem>> parseByDomTraversal(Document document) {
+        Map<Integer, LinkedHashSet<GearItem>> byGear = new TreeMap<>();
+
+        Elements candidates = document.select("li, tr, .item, .media, .collection-item, .eq-item, .gear-item, a, div, span, p");
+        Integer currentGear = null;
+
+        for (Element el : candidates) {
+            Integer detected = detectGearFromElementContext(el);
+            if (detected != null) {
+                currentGear = detected;
+            }
+
+            String itemName = extractItemName(el.text());
+            if (itemName.isBlank()) {
+                continue;
+            }
+
+            Integer gearForItem = Optional.ofNullable(detected)
+                    .or(() -> Optional.ofNullable(currentGear))
+                    .or(() -> Optional.ofNullable(parseGearLevelText(el.closest("section, article, table, ul, ol, div") != null ? el.closest("section, article, table, ul, ol, div").text() : "")))
+                    .orElse(null);
+
+            if (gearForItem == null) {
+                continue;
+            }
+
+            byGear.computeIfAbsent(gearForItem, ignored -> new LinkedHashSet<>())
+                    .add(new GearItem(itemName, detectColor(el, itemName)));
+        }
+
+        return byGear;
+    }
+
+    private Map<Integer, LinkedHashSet<GearItem>> parseByScriptSegments(Document document) {
+        Map<Integer, LinkedHashSet<GearItem>> byGear = new TreeMap<>();
+
+        for (Element script : document.select("script")) {
+            String content = script.data();
+            if (content == null || content.isBlank()) {
+                continue;
+            }
+
+            List<GearMarker> markers = findGearMarkers(content);
+            for (int i = 0; i < markers.size(); i++) {
+                GearMarker marker = markers.get(i);
+                int start = marker.position();
+                int end = i + 1 < markers.size() ? markers.get(i + 1).position() : content.length();
+                if (end <= start) {
+                    continue;
+                }
+
+                String segment = content.substring(start, end);
+                Matcher itemMatcher = SCRIPT_ITEM_PATTERN.matcher(segment);
+                while (itemMatcher.find()) {
+                    String itemName = extractItemName(itemMatcher.group(1));
+                    if (itemName.isBlank()) {
+                        continue;
+                    }
+                    byGear.computeIfAbsent(marker.gear(), ignored -> new LinkedHashSet<>())
+                            .add(new GearItem(itemName, detectColorFromText(segment + " " + itemName)));
+                }
+            }
+        }
+
+        return byGear;
+    }
+
+    private List<GearMarker> findGearMarkers(String content) {
+        List<GearMarker> markers = new ArrayList<>();
+        Matcher matcher = GEAR_ANYWHERE_PATTERN.matcher(content);
+        while (matcher.find()) {
+            Integer level = parseGearLevelText(matcher.group(1));
+            if (level != null) {
+                markers.add(new GearMarker(level, matcher.start()));
+            }
+        }
+        return markers;
+    }
+
+    private Map<Integer, LinkedHashSet<GearItem>> parseByDataAttributes(Document document) {
+        Map<Integer, LinkedHashSet<GearItem>> byGear = new TreeMap<>();
+        Elements nodes = document.select("[data-gear], [data-gear-level], [data-tier], [data-name], [title], [alt]");
+
+        for (Element node : nodes) {
+            Integer gear = Optional.ofNullable(parseGearLevelText(node.attr("data-gear")))
+                    .or(() -> Optional.ofNullable(parseGearLevelText(node.attr("data-gear-level"))))
+                    .or(() -> Optional.ofNullable(parseGearLevelText(node.attr("data-tier"))))
+                    .orElseGet(() -> detectGearFromElementContext(node));
+
+            if (gear == null) {
+                continue;
+            }
+
+            String item = extractItemName(String.join(" ", node.ownText(), node.attr("data-name"), node.attr("title"), node.attr("alt")));
+            if (item.isBlank()) {
+                continue;
+            }
+
+            byGear.computeIfAbsent(gear, ignored -> new LinkedHashSet<>())
+                    .add(new GearItem(item, detectColor(node, item)));
+        }
+
+        return byGear;
+    }
+
+    private Integer detectGearFromElementContext(Element element) {
+        Integer direct = parseGearLevelText(element.text());
+        if (direct != null) {
+            return direct;
+        }
+
+        Element cursor = element;
+        while (cursor != null) {
+            Element sibling = cursor.previousElementSibling();
+            while (sibling != null) {
+                Integer fromSibling = parseGearLevelText(sibling.text());
+                if (fromSibling != null) {
+                    return fromSibling;
+                }
+                sibling = sibling.previousElementSibling();
+            }
+            cursor = cursor.parent();
+        }
+        return null;
     }
 
     private Integer parseGearLevelText(String raw) {
@@ -239,7 +342,12 @@ public class GearParsingEngine {
             return null;
         }
 
-        Matcher numericMatcher = Pattern.compile("([0-9]{1,2})").matcher(raw);
+        Matcher gearMatcher = GEAR_LABEL_PATTERN.matcher(raw);
+        if (gearMatcher.find()) {
+            return parseGearLevelText(gearMatcher.group(1));
+        }
+
+        Matcher numericMatcher = Pattern.compile("\\b([0-9]{1,2})\\b").matcher(raw);
         if (numericMatcher.find()) {
             return Integer.parseInt(numericMatcher.group(1));
         }
@@ -252,250 +360,15 @@ public class GearParsingEngine {
         return null;
     }
 
-    private String detectColorFromText(String input) {
-        String aggregated = Optional.ofNullable(input).orElse("").toLowerCase(Locale.ROOT);
-
-        if (containsAny(aggregated, "orange", "gold", "amber", "legendary")) return "orange";
-        if (containsAny(aggregated, "blue", "bleu", "rare")) return "bleu";
-        if (containsAny(aggregated, "purple", "epic", "violet")) return "violet";
-        if (containsAny(aggregated, "green", "vert", "uncommon")) return "vert";
-        if (containsAny(aggregated, "grey", "gray", "common", "basic")) return "gris";
-
-        if (aggregated.contains("prototype")) return "orange";
-        return "inconnu";
-    }
-    private List<GearStat> parseByGearSections(Document document) {
-        List<Element> headings = document.select("h1, h2, h3, h4, h5, .card-title, .section-title, strong").stream()
-                .filter(el -> GEAR_LABEL_PATTERN.matcher(el.text()).find())
-                .toList();
-
-        List<GearStat> stats = new ArrayList<>();
-        for (Element heading : headings) {
-            String gear = normalizeGearLabel(heading.text());
-            if (gear == null) {
-                continue;
-            }
-            List<GearItem> items = extractItemsFromSection(heading);
-            if (!items.isEmpty()) {
-                stats.add(toStat(gear, items));
-            }
-        }
-
-        return stats.stream()
-                .sorted(Comparator.comparingInt(this::gearLevelFromLabel))
-                .toList();
-    }
-
-    private List<GearStat> parseByRows(Document document) {
-        Elements rows = document.select("tr, li, .media, .list-group-item, .collection-item");
-        Map<String, List<GearItem>> byGear = new LinkedHashMap<>();
-
-        for (Element row : rows) {
-            String text = row.text();
-            if (!ITEM_PATTERN.matcher(text).find()) {
-                continue;
-            }
-
-            String gear = Optional.ofNullable(inferGearLabel(row)).orElse("Gear inconnu");
-            String itemName = extractItemName(text);
-            if (itemName.isBlank()) {
-                continue;
-            }
-
-            String color = detectColor(row, itemName);
-            byGear.computeIfAbsent(gear, key -> new ArrayList<>())
-                    .add(new GearItem(itemName, color));
-        }
-
-        return byGear.entrySet().stream()
-                .map(entry -> toStat(entry.getKey(), entry.getValue()))
-                .sorted(Comparator.comparingInt(this::gearLevelFromLabel))
-                .toList();
-    }
-
-    private List<GearStat> parseByEmbeddedScripts(Document document) {
-        Map<String, List<GearItem>> byGear = new LinkedHashMap<>();
-
-        for (Element script : document.select("script")) {
-            String scriptContent = script.data();
-            if (scriptContent == null || scriptContent.isBlank()) {
-                continue;
-            }
-
-            String currentGear = null;
-            Matcher gearMatcher = Pattern.compile("(?i)gear\\W{0,5}([0-9]{1,2}|[xiv]+)").matcher(scriptContent);
-            while (gearMatcher.find()) {
-                currentGear = "Gear " + gearMatcher.group(1).toUpperCase(Locale.ROOT);
-                byGear.putIfAbsent(currentGear, new ArrayList<>());
-
-                int windowStart = gearMatcher.end();
-                int windowEnd = Math.min(scriptContent.length(), windowStart + 1200);
-                String window = scriptContent.substring(windowStart, windowEnd);
-
-                Matcher itemMatcher = Pattern.compile("(?i)(mk\\s*[0-9ivx][^\"\\n\\r]{2,90}(?:salvage|prototype|component|furnace|stun gun|injector|medpac|keypad))")
-                        .matcher(window);
-                while (itemMatcher.find()) {
-                    String itemName = extractItemName(itemMatcher.group(1));
-                    if (!itemName.isBlank()) {
-                        byGear.get(currentGear).add(new GearItem(itemName, detectColor(script, itemName)));
-                    }
-                }
-            }
-
-            Matcher objectMatcher = SCRIPT_OBJECT_PATTERN.matcher(scriptContent);
-            while (objectMatcher.find()) {
-                String objectChunk = objectMatcher.group();
-                String gear = normalizeGearLabelFromScriptChunk(objectChunk);
-                if (gear == null) {
-                    continue;
-                }
-                String itemName = extractItemNameFromScriptChunk(objectChunk);
-                if (itemName.isBlank()) {
-                    continue;
-                }
-                byGear.computeIfAbsent(gear, ignored -> new ArrayList<>())
-                        .add(new GearItem(itemName, detectColor(script, itemName)));
-            }
-        }
-
-        return byGear.entrySet().stream()
-                .filter(entry -> !entry.getValue().isEmpty())
-                .map(entry -> toStat(entry.getKey(), entry.getValue()))
-                .sorted(Comparator.comparingInt(this::gearLevelFromLabel))
-                .toList();
-    }
-
-    private List<GearStat> parseByDataAttributes(Document document) {
-        Elements candidates = document.select("[data-gear], [data-gear-level], [data-tier], [data-name], [title], [alt], a, span, div");
-        Map<String, List<GearItem>> byGear = new LinkedHashMap<>();
-
-        for (Element candidate : candidates) {
-            String itemText = String.join(" ",
-                    candidate.ownText(),
-                    candidate.attr("data-name"),
-                    candidate.attr("title"),
-                    candidate.attr("alt")).trim();
-            String itemName = extractItemName(itemText);
-            if (itemName.isBlank()) {
-                continue;
-            }
-
-            String gear = Optional.ofNullable(normalizeGearLabel(candidate.attr("data-gear")))
-                    .or(() -> Optional.ofNullable(normalizeGearLabel(candidate.attr("data-gear-level"))))
-                    .or(() -> Optional.ofNullable(normalizeGearLabel(candidate.attr("data-tier"))))
-                    .or(() -> Optional.ofNullable(inferGearLabel(candidate)))
-                    .orElse("Gear inconnu");
-
-            byGear.computeIfAbsent(gear, ignored -> new ArrayList<>())
-                    .add(new GearItem(itemName, detectColor(candidate, itemName)));
-        }
-
-        return byGear.entrySet().stream()
-                .filter(entry -> !entry.getValue().isEmpty())
-                .map(entry -> toStat(entry.getKey(), entry.getValue()))
-                .sorted(Comparator.comparingInt(this::gearLevelFromLabel))
-                .toList();
-    }
-
-    private String normalizeGearLabelFromScriptChunk(String chunk) {
-        Matcher matcher = SCRIPT_GEAR_FIELD_PATTERN.matcher(chunk);
-        if (!matcher.find()) {
-            return null;
-        }
-        return "Gear " + matcher.group(1).toUpperCase(Locale.ROOT);
-    }
-
-    private String extractItemNameFromScriptChunk(String chunk) {
-        Matcher matcher = SCRIPT_ITEM_FIELD_PATTERN.matcher(chunk);
-        if (!matcher.find()) {
+    private String extractItemName(String rawText) {
+        if (rawText == null) {
             return "";
         }
-        return extractItemName(matcher.group(1));
-    }
-
-    private String inferGearLabel(Element row) {
-        String direct = normalizeGearLabel(row.text());
-        if (direct != null) {
-            return direct;
+        String text = rawText.replaceAll("\\s+", " ").trim();
+        if (text.length() > 180) {
+            text = text.substring(0, 180);
         }
-
-        Element cursor = row;
-        while (cursor != null) {
-            Element sibling = cursor.previousElementSibling();
-            while (sibling != null) {
-                String fromSibling = normalizeGearLabel(sibling.text());
-                if (fromSibling != null) {
-                    return fromSibling;
-                }
-
-                Element nestedHeading = sibling.selectFirst("h1, h2, h3, h4, h5, h6");
-                if (nestedHeading != null) {
-                    String fromNestedHeading = normalizeGearLabel(nestedHeading.text());
-                    if (fromNestedHeading != null) {
-                        return fromNestedHeading;
-                    }
-                }
-                sibling = sibling.previousElementSibling();
-            }
-            cursor = cursor.parent();
-        }
-
-        return null;
-    }
-
-    private ParseResult pickBest(ParseResult... candidates) {
-        ParseResult best = new ParseResult(List.of(), "no-data");
-        for (ParseResult candidate : candidates) {
-            if (isBetter(candidate, best)) {
-                best = candidate;
-            }
-        }
-        return best;
-    }
-
-    private boolean isBetter(ParseResult candidate, ParseResult currentBest) {
-        int candidateGears = candidate.stats().size();
-        int currentGears = currentBest.stats().size();
-        if (candidateGears != currentGears) {
-            return candidateGears > currentGears;
-        }
-
-        int candidateItems = candidate.stats().stream().mapToInt(GearStat::totalItems).sum();
-        int currentItems = currentBest.stats().stream().mapToInt(GearStat::totalItems).sum();
-        return candidateItems > currentItems;
-    }
-
-    private List<GearItem> extractItemsFromSection(Element heading) {
-        List<GearItem> items = new ArrayList<>();
-        Element cursor = heading;
-        int maxNodes = 120;
-
-        while (cursor != null && maxNodes-- > 0) {
-            cursor = cursor.nextElementSibling();
-            if (cursor == null) {
-                break;
-            }
-            if (GEAR_LABEL_PATTERN.matcher(cursor.text()).find() && cursor.tagName().matches("h[1-6]")) {
-                break;
-            }
-
-            for (Element candidate : cursor.select("li, tr, .item, .media, .collection-item, .eq-item, .gear-item, a")) {
-                String itemName = extractItemName(candidate.text());
-                if (!itemName.isBlank()) {
-                    items.add(new GearItem(itemName, detectColor(candidate, itemName)));
-                }
-            }
-        }
-
-        return items.stream().filter(item -> ITEM_PATTERN.matcher(item.name()).find()).toList();
-    }
-
-    private GearStat toStat(String gearLabel, List<GearItem> items) {
-        Map<String, Integer> counts = new LinkedHashMap<>();
-        for (GearItem item : items) {
-            counts.merge(item.color(), 1, Integer::sum);
-        }
-        return new GearStat(gearLabel, items.size(), counts, items);
+        return ITEM_PATTERN.matcher(text).find() ? text : "";
     }
 
     private String detectColor(Element source, String itemName) {
@@ -507,6 +380,17 @@ public class GearParsingEngine {
         return detectColorFromText(aggregated);
     }
 
+    private String detectColorFromText(String input) {
+        String aggregated = Optional.ofNullable(input).orElse("").toLowerCase(Locale.ROOT);
+        if (containsAny(aggregated, "orange", "gold", "amber", "legendary")) return "orange";
+        if (containsAny(aggregated, "blue", "bleu", "rare")) return "bleu";
+        if (containsAny(aggregated, "purple", "epic", "violet")) return "violet";
+        if (containsAny(aggregated, "green", "vert", "uncommon")) return "vert";
+        if (containsAny(aggregated, "grey", "gray", "common", "basic")) return "gris";
+        if (aggregated.contains("prototype")) return "orange";
+        return "inconnu";
+    }
+
     private boolean containsAny(String input, String... values) {
         for (String value : values) {
             if (input.contains(value)) {
@@ -514,14 +398,6 @@ public class GearParsingEngine {
             }
         }
         return false;
-    }
-
-    private String normalizeGearLabel(String text) {
-        Matcher matcher = GEAR_LABEL_PATTERN.matcher(text);
-        if (!matcher.find()) {
-            return null;
-        }
-        return "Gear " + matcher.group(1).toUpperCase(Locale.ROOT);
     }
 
     private int gearLevelFromLabel(GearStat stat) {
@@ -541,14 +417,7 @@ public class GearParsingEngine {
     }
 
     private int romanToInt(String roman) {
-        Map<Character, Integer> values = Map.of(
-                'I', 1,
-                'V', 5,
-                'X', 10,
-                'L', 50,
-                'C', 100
-        );
-
+        Map<Character, Integer> values = Map.of('I', 1, 'V', 5, 'X', 10, 'L', 50, 'C', 100);
         int total = 0;
         for (int i = 0; i < roman.length(); i++) {
             int current = Objects.requireNonNullElse(values.get(roman.charAt(i)), 0);
@@ -558,16 +427,15 @@ public class GearParsingEngine {
         return total;
     }
 
-    private String extractItemName(String rawText) {
-        if (rawText == null) {
-            return "";
+    private GearStat toStat(String gearLabel, List<GearItem> items) {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (GearItem item : items) {
+            counts.merge(item.color(), 1, Integer::sum);
         }
-        String text = rawText.replaceAll("\\s+", " ").trim();
-        if (text.length() > 160) {
-            text = text.substring(0, 160);
-        }
-        return ITEM_PATTERN.matcher(text).find() ? text : "";
+        return new GearStat(gearLabel, items.size(), counts, items);
     }
+
+    private record GearMarker(int gear, int position) {}
 
     public record ParseResult(List<GearStat> stats, String strategy) {
     }
