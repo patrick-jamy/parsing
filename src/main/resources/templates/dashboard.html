@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SWGOH Gear Parser</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 2rem; background: #0f172a; color: #e2e8f0; }
+        button { background: #2563eb; color: white; border: 0; border-radius: 8px; padding: .6rem 1rem; cursor: pointer; }
+        button:hover { background: #1d4ed8; }
+        table { width: 100%; border-collapse: collapse; margin-top: 1rem; background: #1e293b; }
+        th, td { padding: .6rem; border: 1px solid #334155; text-align: left; }
+        .meta { opacity: .8; margin: .6rem 0; }
+    </style>
+</head>
+<body>
+<h1>Dashboard de parsing SWGOH</h1>
+<p>Extraction intelligente des items par gear + catégorisation couleur.</p>
+<button id="reloadButton">Reload</button>
+<p class="meta" id="meta"></p>
+<canvas id="gearChart" height="110"></canvas>
+<table>
+    <thead>
+    <tr>
+        <th>Gear</th>
+        <th>Total items</th>
+        <th>Bleus</th>
+        <th>Orange</th>
+        <th>Autres</th>
+    </tr>
+    </thead>
+    <tbody id="statsBody"></tbody>
+</table>
+
+<script>
+    let chart;
+
+    async function loadStats(reload = false) {
+        const endpoint = reload ? '/api/stats/reload' : '/api/stats';
+        const method = reload ? 'POST' : 'GET';
+        const response = await fetch(endpoint, {method});
+        const data = await response.json();
+
+        document.getElementById('meta').innerText =
+            `Source: ${data.sourceUrl} | Refresh: ${new Date(data.refreshedAt).toLocaleString()} | Stratégie: ${data.parserStrategy}`;
+
+        const body = document.getElementById('statsBody');
+        body.innerHTML = '';
+
+        data.gears.forEach(gear => {
+            const blue = gear.colorCounts['bleu'] || 0;
+            const orange = gear.colorCounts['orange'] || 0;
+            const others = gear.totalItems - blue - orange;
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${gear.gearLabel}</td><td>${gear.totalItems}</td><td>${blue}</td><td>${orange}</td><td>${others}</td>`;
+            body.appendChild(tr);
+        });
+
+        renderChart(data.gears);
+    }
+
+    function renderChart(gears) {
+        const labels = gears.map(g => g.gearLabel);
+        const totals = gears.map(g => g.totalItems);
+        const blues = gears.map(g => g.colorCounts['bleu'] || 0);
+        const oranges = gears.map(g => g.colorCounts['orange'] || 0);
+
+        if (chart) chart.destroy();
+
+        chart = new Chart(document.getElementById('gearChart'), {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [
+                    {label: 'Total', data: totals, backgroundColor: 'rgba(148,163,184,0.7)'},
+                    {label: 'Bleu', data: blues, backgroundColor: 'rgba(59,130,246,0.8)'},
+                    {label: 'Orange', data: oranges, backgroundColor: 'rgba(249,115,22,0.8)'}
+                ]
+            },
+            options: {responsive: true}
+        });
+    }
+
+    document.getElementById('reloadButton').addEventListener('click', () => loadStats(true));
+    loadStats();
+</script>
+</body>
+</html>
