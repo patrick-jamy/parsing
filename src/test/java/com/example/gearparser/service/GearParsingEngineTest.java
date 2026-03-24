@@ -78,7 +78,44 @@ class GearParsingEngineTest {
 
         GearParsingEngine.ParseResult result = engine.parse(html);
 
-        assertThat(result.strategy()).isEqualTo("embedded-script-heuristics");
+        assertThat(result.strategy()).isEqualTo("structured-json-graph-walk");
+        assertThat(result.stats()).hasSize(12);
+        assertThat(result.stats()).extracting(GearStat::gearLabel)
+                .containsExactly(
+                        "Gear 1", "Gear 2", "Gear 3", "Gear 4", "Gear 5", "Gear 6",
+                        "Gear 7", "Gear 8", "Gear 9", "Gear 10", "Gear 11", "Gear 12");
+    }
+
+    @Test
+    void shouldParseNestedJsonWithoutRepeatingGearOnEveryItem() {
+        String html = """
+                <html><body><script>
+                window.__NEXT_DATA__ = {
+                  "props": {
+                    "pageProps": {
+                      "tiers": [
+                        {"gearLevel": 1, "ingredients": [{"name": "Mk 1 Sienar Holo Projector Salvage"}]},
+                        {"gearLevel": 2, "ingredients": [{"name": "Mk 2 CEC Fusion Furnace Salvage"}]},
+                        {"gearLevel": 3, "ingredients": [{"name": "Mk 3 Carbanti Sensor Array Salvage"}]},
+                        {"gearLevel": 4, "ingredients": [{"name": "Mk 4 Chiewab Hypo Syringe Salvage"}]},
+                        {"gearLevel": 5, "ingredients": [{"name": "Mk 5 A/KT Stun Gun Salvage"}]},
+                        {"gearLevel": 6, "ingredients": [{"name": "Mk 6 Athakam Medpac Salvage"}]},
+                        {"gearLevel": 7, "ingredients": [{"name": "Mk 7 Kyrotech Shock Prod Prototype Salvage"}]},
+                        {"gearLevel": 8, "ingredients": [{"name": "Mk 8 BioTech Implant Component"}]},
+                        {"gearLevel": 9, "ingredients": [{"name": "Mk 9 Neuro-Saav Electrobinoculars Component"}]},
+                        {"gearLevel": 10, "ingredients": [{"name": "Mk 10 TaggeCo Holo Lens Salvage"}]},
+                        {"gearLevel": 11, "ingredients": [{"name": "Mk 11 BlasTech Weapon Mod Prototype"}]},
+                        {"gearLevel": 12, "ingredients": [{"name": "Mk 12 ArmaTek Fusion Furnace Prototype Salvage"}]}
+                      ]
+                    }
+                  }
+                };
+                </script></body></html>
+                """;
+
+        GearParsingEngine.ParseResult result = engine.parse(html);
+
+        assertThat(result.strategy()).isEqualTo("structured-json-graph-walk");
         assertThat(result.stats()).hasSize(12);
         assertThat(result.stats()).extracting(GearStat::gearLabel)
                 .containsExactly(
