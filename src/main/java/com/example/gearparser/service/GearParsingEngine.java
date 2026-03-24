@@ -1,8 +1,10 @@
 package com.example.gearparser.service;
 
 import com.example.gearparser.model.GearItem;
+import com.fasterxml.jackson.core.json.JsonReadFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.example.gearparser.model.GearStat;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -27,7 +29,11 @@ import java.util.regex.Pattern;
 @Component
 public class GearParsingEngine {
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = JsonMapper.builder()
+            .enable(JsonReadFeature.ALLOW_UNQUOTED_FIELD_NAMES)
+            .enable(JsonReadFeature.ALLOW_SINGLE_QUOTES)
+            .enable(JsonReadFeature.ALLOW_TRAILING_COMMA)
+            .build();
 
     private static final Pattern GEAR_LABEL_PATTERN = Pattern.compile("(?i)\\bgear\\s*([0-9]{1,2}|[xiv]+)\\b");
     private static final Pattern ITEM_PATTERN = Pattern.compile("(?i)mk\\s*[0-9ivx]+|salvage|prototype|injector|furnace|medpac|keypad|stun");
