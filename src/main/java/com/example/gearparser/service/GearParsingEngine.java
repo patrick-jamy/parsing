@@ -28,12 +28,14 @@ public class GearParsingEngine {
     public ParseResult parse(String html) {
         Document document = Jsoup.parse(html);
         List<GearStat> bySections = parseByGearSections(document);
-        if (!bySections.isEmpty()) {
-            return new ParseResult(bySections, "dom-section-heuristics");
-        }
-
         List<GearStat> byTableRows = parseByRows(document);
-        return new ParseResult(byTableRows, "row-fallback-heuristics");
+        List<GearStat> byEmbeddedData = parseByEmbeddedScripts(document);
+
+        return pickBest(
+                new ParseResult(bySections, "dom-section-heuristics"),
+                new ParseResult(byTableRows, "row-fallback-heuristics"),
+                new ParseResult(byEmbeddedData, "embedded-script-heuristics")
+        );
     }
 
     private List<GearStat> parseByGearSections(Document document) {
@@ -83,6 +85,65 @@ public class GearParsingEngine {
                 .map(entry -> toStat(entry.getKey(), entry.getValue()))
                 .sorted(Comparator.comparingInt(this::gearLevelFromLabel))
                 .toList();
+    }
+
+    private List<GearStat> parseByEmbeddedScripts(Document document) {
+        Map<String, List<GearItem>> byGear = new LinkedHashMap<>();
+
+        for (Element script : document.select("script")) {
+            String scriptContent = script.data();
+            if (scriptContent == null || scriptContent.isBlank()) {
+                continue;
+            }
+
+            String currentGear = null;
+            Matcher gearMatcher = Pattern.compile("(?i)gear\\W{0,5}([0-9]{1,2}|[xiv]+)").matcher(scriptContent);
+            while (gearMatcher.find()) {
+                currentGear = "Gear " + gearMatcher.group(1).toUpperCase(Locale.ROOT);
+                byGear.putIfAbsent(currentGear, new ArrayList<>());
+
+                int windowStart = gearMatcher.end();
+                int windowEnd = Math.min(scriptContent.length(), windowStart + 1200);
+                String window = scriptContent.substring(windowStart, windowEnd);
+
+                Matcher itemMatcher = Pattern.compile("(?i)(mk\\s*[0-9ivx][^\"\\n\\r]{2,90}(?:salvage|prototype|component|furnace|stun gun|injector|medpac|keypad))")
+                        .matcher(window);
+                while (itemMatcher.find()) {
+                    String itemName = extractItemName(itemMatcher.group(1));
+                    if (!itemName.isBlank()) {
+                        byGear.get(currentGear).add(new GearItem(itemName, detectColor(script, itemName)));
+                    }
+                }
+            }
+        }
+
+        return byGear.entrySet().stream()
+                .filter(entry -> !entry.getValue().isEmpty())
+                .map(entry -> toStat(entry.getKey(), entry.getValue()))
+                .sorted(Comparator.comparingInt(this::gearLevelFromLabel))
+                .toList();
+    }
+
+    private ParseResult pickBest(ParseResult... candidates) {
+        ParseResult best = new ParseResult(List.of(), "no-data");
+        for (ParseResult candidate : candidates) {
+            if (isBetter(candidate, best)) {
+                best = candidate;
+            }
+        }
+        return best;
+    }
+
+    private boolean isBetter(ParseResult candidate, ParseResult currentBest) {
+        int candidateGears = candidate.stats().size();
+        int currentGears = currentBest.stats().size();
+        if (candidateGears != currentGears) {
+            return candidateGears > currentGears;
+        }
+
+        int candidateItems = candidate.stats().stream().mapToInt(GearStat::totalItems).sum();
+        int currentItems = currentBest.stats().stream().mapToInt(GearStat::totalItems).sum();
+        return candidateItems > currentItems;
     }
 
     private List<GearItem> extractItemsFromSection(Element heading) {
