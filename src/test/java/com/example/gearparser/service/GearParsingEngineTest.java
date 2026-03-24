@@ -1,40 +1,42 @@
 package com.example.gearparser.service;
 
 import com.example.gearparser.model.GearStat;
-import org.junit.jupiter.api.Test;
+import org.junit.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
-class GearParsingEngineTest {
+public class GearParsingEngineTest {
 
     private final GearParsingEngine engine = new GearParsingEngine();
 
     @Test
-    void shouldParseGearSectionsAndDetectColors() throws Exception {
+    public void shouldParseGearSectionsAndDetectColors() throws Exception {
         String html = Files.readString(Path.of("src/test/resources/sample-gear-page.html"));
 
         GearParsingEngine.ParseResult result = engine.parse(html);
         List<GearStat> stats = result.stats();
 
-        assertThat(result.strategy()).isEqualTo("multi-source-merged");
-        assertThat(stats).hasSize(2);
+        assertEquals("multi-source-merged", result.strategy());
+        assertEquals(2, stats.size());
 
-        GearStat gear8 = stats.getFirst();
-        assertThat(gear8.gearLabel()).isEqualTo("Gear 8");
-        assertThat(gear8.totalItems()).isEqualTo(3);
-        assertThat(gear8.colorCounts()).containsEntry("bleu", 1).containsEntry("orange", 1);
+        GearStat gear8 = stats.get(0);
+        assertEquals("Gear 8", gear8.gearLabel());
+        assertEquals(3, gear8.totalItems());
+        assertEquals(Integer.valueOf(1), gear8.colorCounts().get("bleu"));
+        assertEquals(Integer.valueOf(1), gear8.colorCounts().get("orange"));
 
         GearStat gear9 = stats.get(1);
-        assertThat(gear9.gearLabel()).isEqualTo("Gear 9");
-        assertThat(gear9.totalItems()).isEqualTo(2);
+        assertEquals("Gear 9", gear9.gearLabel());
+        assertEquals(2, gear9.totalItems());
     }
 
     @Test
-    void shouldParseMixedSourcesWithoutDroppingGears() {
+    public void shouldParseMixedSourcesWithoutDroppingGears() {
         String html = """
                 <html><body>
                 <h2>Gear 8</h2>
@@ -49,14 +51,15 @@ class GearParsingEngineTest {
 
         GearParsingEngine.ParseResult result = engine.parse(html);
 
-        assertThat(result.strategy()).isEqualTo("multi-source-merged");
-        assertThat(result.stats()).hasSize(3);
-        assertThat(result.stats()).extracting(GearStat::gearLabel)
-                .containsExactly("Gear 8", "Gear 9", "Gear 10");
+        assertEquals("multi-source-merged", result.strategy());
+        assertEquals(3, result.stats().size());
+        assertEquals("Gear 8", result.stats().get(0).gearLabel());
+        assertEquals("Gear 9", result.stats().get(1).gearLabel());
+        assertEquals("Gear 10", result.stats().get(2).gearLabel());
     }
 
     @Test
-    void shouldParseAllGearsFromEmbeddedDataObjects() {
+    public void shouldParseAllGearsFromEmbeddedDataObjects() {
         String html = """
                 <html><body><script>
                 const gear = [
@@ -78,16 +81,15 @@ class GearParsingEngineTest {
 
         GearParsingEngine.ParseResult result = engine.parse(html);
 
-        assertThat(result.strategy()).isEqualTo("multi-source-merged");
-        assertThat(result.stats()).hasSize(12);
-        assertThat(result.stats()).extracting(GearStat::gearLabel)
-                .containsExactly(
-                        "Gear 1", "Gear 2", "Gear 3", "Gear 4", "Gear 5", "Gear 6",
-                        "Gear 7", "Gear 8", "Gear 9", "Gear 10", "Gear 11", "Gear 12");
+        assertEquals("multi-source-merged", result.strategy());
+        assertEquals(12, result.stats().size());
+        for (int i = 0; i < 12; i++) {
+            assertEquals("Gear " + (i + 1), result.stats().get(i).gearLabel());
+        }
     }
 
     @Test
-    void shouldParseNestedJsonWithoutRepeatingGearOnEveryItem() {
+    public void shouldParseNestedJsonWithoutRepeatingGearOnEveryItem() {
         String html = """
                 <html><body><script>
                 window.__NEXT_DATA__ = {
@@ -115,16 +117,15 @@ class GearParsingEngineTest {
 
         GearParsingEngine.ParseResult result = engine.parse(html);
 
-        assertThat(result.strategy()).isEqualTo("multi-source-merged");
-        assertThat(result.stats()).hasSize(12);
-        assertThat(result.stats()).extracting(GearStat::gearLabel)
-                .containsExactly(
-                        "Gear 1", "Gear 2", "Gear 3", "Gear 4", "Gear 5", "Gear 6",
-                        "Gear 7", "Gear 8", "Gear 9", "Gear 10", "Gear 11", "Gear 12");
+        assertEquals("multi-source-merged", result.strategy());
+        assertEquals(12, result.stats().size());
+        for (int i = 0; i < 12; i++) {
+            assertEquals("Gear " + (i + 1), result.stats().get(i).gearLabel());
+        }
     }
 
     @Test
-    void shouldNotStopAfterTwoScriptSegments() {
+    public void shouldNotStopAfterTwoScriptSegments() {
         String filler = "x".repeat(1600);
         String html = "<html><body><script>"
                 + "gear 8 " + filler + " Mk 8 BioTech Implant Component "
@@ -134,7 +135,9 @@ class GearParsingEngineTest {
 
         GearParsingEngine.ParseResult result = engine.parse(html);
 
-        assertThat(result.stats()).extracting(GearStat::gearLabel)
-                .contains("Gear 8", "Gear 9", "Gear 10");
+        List<String> labels = result.stats().stream().map(GearStat::gearLabel).toList();
+        assertTrue(labels.contains("Gear 8"));
+        assertTrue(labels.contains("Gear 9"));
+        assertTrue(labels.contains("Gear 10"));
     }
 }
