@@ -11,7 +11,8 @@ import java.time.Instant;
 
 @Service
 public class GearStatsService {
-    private static final int MIN_EXPECTED_GEAR_COUNT = 12;
+    private static final int MIN_EXPECTED_REMOTE_GEAR_COUNT = 12;
+    private static final int MIN_EXPECTED_FALLBACK_GEAR_COUNT = 1;
 
     private final HtmlFetcher htmlFetcher;
     private final GearParsingEngine parsingEngine;
@@ -38,23 +39,23 @@ public class GearStatsService {
         GearParsingEngine.ParseResult result;
         try {
             String html = htmlFetcher.fetch(sourceUrl);
-            result = parseAndValidate(html, "source distante");
+            result = parseAndValidate(html, "source distante", MIN_EXPECTED_REMOTE_GEAR_COUNT);
         } catch (Exception ex) {
             strategyPrefix = "fallback-sample";
             String fallbackHtml = loadFallbackHtml();
-            result = parseAndValidate(fallbackHtml, "fallback local");
+            result = parseAndValidate(fallbackHtml, "fallback local", MIN_EXPECTED_FALLBACK_GEAR_COUNT);
         }
 
         cache = new ParseResponse(sourceUrl, Instant.now(), result.stats(), strategyPrefix + "+" + result.strategy());
         return cache;
     }
 
-    private GearParsingEngine.ParseResult parseAndValidate(String html, String sourceLabel) {
+    private GearParsingEngine.ParseResult parseAndValidate(String html, String sourceLabel, int minExpectedGearCount) {
         GearParsingEngine.ParseResult result = parsingEngine.parse(html);
-        if (result.stats().size() < MIN_EXPECTED_GEAR_COUNT) {
+        if (result.stats().size() < minExpectedGearCount) {
             throw new IllegalStateException(
                     "Parsing incomplet depuis " + sourceLabel + " : " + result.stats().size()
-                            + " gears trouvés au lieu d'au moins " + MIN_EXPECTED_GEAR_COUNT + ".");
+                            + " gears trouvés au lieu d'au moins " + minExpectedGearCount + ".");
         }
         return result;
     }
